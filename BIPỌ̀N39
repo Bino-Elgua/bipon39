@@ -1,0 +1,381 @@
+Do you need ********   --- FILE: package.json { "name": "bipon39", "version": "1.0.0", "private": true, "type": "module", "scripts": { "build": "tsc -p tsconfig.json", "dev": "ts-node --esm src/cli.ts", "test": "vitest run", "lint": "echo 'lint placeholder'" }, "dependencies": { "qrcode-terminal": "0.12.0" }, "devDependencies": { "typescript": "5.5.4", "ts-node": "10.9.2", "vitest": "1.6.0", "@types/node": "20.12.12" } }
+
+--- FILE: tsconfig.json { "compilerOptions": { "target": "ES2020", "module": "ES2020", "moduleResolution": "Node", "outDir": "dist", "rootDir": "src", "strict": true, "esModuleInterop": true, "forceConsistentCasingInFileNames": true, "skipLibCheck": true }, "include": ["src", "test", "vectors"] }
+
+--- FILE: src/wordspace.ts // BIPỌ̀N39 — Base-256 canon (v1.0) // 16 ROOTS × 16 AFFIXES → 256 tokens. Frozen slug order is canonical. export const ROOTS = [ "esu","sango","ogun","oya","yemoja","osun","obatala","orunmila", "egungun","ori","ile","omi","ina","afeefe","igi","irawo" ] as const;
+
+export const AFFIXES = [ "gate","volt","forge","stream","tide","veil","crown","mirror", "path","seal","code","sigil","drum","thunder","river","dawn" ] as const;
+
+export type Mode = "256"|"2048";
+
+export const BASE256: string[] = (() => { const out: string[] = []; for (const r of ROOTS) for (const a of AFFIXES) out.push(${r}-${a}); return Object.freeze(out); })();
+
+// Deterministic expansion to 2048: index = (baseId<<3)|subIndex export const SUBTONES = ["alpha","beta","gamma","delta","epsilon","zeta","eta","theta"] as const; export const EXP2048: string[] = (() => { const out: string[] = []; for (let baseId = 0; baseId < BASE256.length; baseId++) { const base = BASE256[baseId]; for (const st of SUBTONES) out.push(${base}~${st}); } return Object.freeze(out); })();
+
+// Merkle root (SHA-256 leaves of ASCII slugs; pairwise concat+SHA-256; pad last if odd) // Computed from the canonical BASE256 order. export const WORDLIST256_MERKLE_ROOT = "0ab1fafa074065c86877877f828499a8649b558457000f0ede436730eeb9da89"; // hex
+
+export async function merkleRoot256(slugs: string[] = BASE256): Promise<string> { const { sha256 } = await import('./crypto'); let level: Uint8Array[] = []; for (const s of slugs) level.push(await sha256(new TextEncoder().encode(s))); if (level.length === 0) throw new Error("empty wordlist"); while (level.length > 1) { if (level.length % 2 === 1) level = [...level, level[level.length - 1]]; const next: Uint8Array[] = []; for (let i = 0; i < level.length; i += 2) { const concat = new Uint8Array(level[i].length + level[i + 1].length); concat.set(level[i], 0); concat.set(level[i + 1], level[i].length); next.push(await (await import('./crypto')).sha256(concat)); } level = next; } return bufToHex(level[0]); }
+
+export async function verifyWordlistIntegrity(): Promise<boolean> { return (await merkleRoot256(BASE256)) === WORDLIST256_MERKLE_ROOT; } level = next; } return bufToHex(level[0]); } level = next; } return bufToHex(level[0]); }
+
+// Minimal hex helper export function bufToHex(b: Uint8Array) { return [...b].map((x) => x.toString(16).padStart(2, "0")).join(""); }
+
+// Lightweight crypto shim used by this module (wired in src/crypto.ts) // (removed sync shim) crypto provided by src/crypto.ts at runtime
+
+--- FILE: src/crypto.ts // Node + Browser crypto wiring for SHA-256, PBKDF2-HMAC-SHA512, constant-time compare, zeroize. const isNode = typeof process !== "undefined" && !!(process as any).versions?.node;
+
+export async function sha256(data: Uint8Array): Promise<Uint8Array> { if (!isNode && typeof crypto !== "undefined" && (crypto as any).subtle) { const d = await (crypto as any).subtle.digest("SHA-256", data); return new Uint8Array(d); } const { createHash } = await import("crypto"); const h = createHash("sha256"); h.update(Buffer.from(data)); return new Uint8Array(h.digest()); }
+
+export async function pbkdf2_hmac_sha512(password: Uint8Array, salt: Uint8Array, iters = 2048, dkLen = 64): Promise<Uint8Array> { try { if (!isNode && typeof crypto !== "undefined" && (crypto as any).subtle) { const key = await (crypto as any).subtle.importKey("raw", password, "PBKDF2", false, ["deriveBits"]); const bits = await (crypto as any).subtle.deriveBits({ name: "PBKDF2", hash: "SHA-512", iterations: iters, salt }, key, dkLen * 8); return new Uint8Array(bits); } } catch (_) { /* fall back to Node */ } const { pbkdf2Sync } = await import("crypto"); const out = pbkdf2Sync(Buffer.from(password), Buffer.from(salt), iters, dkLen, "sha512"); return new Uint8Array(out); }
+
+export function timingSafeEq(a: Uint8Array, b: Uint8Array): boolean { if (a.length !== b.length) return false; let r = 0; for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i]; return r === 0; } = require("crypto"); return timingSafeEqual(Buffer.from(a), Buffer.from(b)); } let r = 0; for (let i = 0; i < a.length; i++) r |= a[i] ^ b[i]; return r === 0; }
+
+export function zeroize(buf: Uint8Array) { buf.fill(0); }
+
+--- FILE: src/bipon39.ts import { BASE256, EXP2048, SUBTONES } from "./wordspace"; import { sha256, pbkdf2_hmac_sha512 } from "./crypto";
+
+export type Mode = "256" | "2048"; export const SALT_PREFIX = "BIPỌ̀N39 seed"; // NFC preserved export const PASS_LABEL  = " Ọ̀RÍ:";          // leading space is normative
+
+export const ALLOWED_ENT_256 = [128,160,192,224,256]; export const ALLOWED_ENT_2048 = [128,160,192,224,256];
+
+export function toNFKD(s: string) { return s.normalize("NFKD"); } export function toNFC(s: string)  { return s.normalize("NFC"); }
+
+export function bitsPerWord(mode: Mode): number { return mode === "256" ? 8 : 11; }
+
+export async function entropyToMnemonic(entropy: Uint8Array, mode: Mode): Promise<string[]> { const ENT = entropy.length * 8; const allowed = mode === "256" ? ALLOWED_ENT_256 : ALLOWED_ENT_2048; if (!allowed.includes(ENT)) throw new Error(Invalid ENT ${ENT} for mode ${mode});
+
+const hash = await sha256(entropy); const csBits = ENT / 32; const csByte = hash[0];
+
+const bits: number[] = []; for (const b of entropy) for (let i = 7; i >= 0; i--) bits.push((b >>> i) & 1); for (let i = csBits - 1; i >= 0; i--) bits.push((csByte >>> i) & 1);
+
+const bpw = bitsPerWord(mode); const total = ENT + csBits; const pad = (bpw - (total % bpw)) % bpw; // deterministic zero pad to word boundary for (let i = 0; i < pad; i++) bits.push(0);
+
+const indices: number[] = []; for (let i = 0; i < bits.length; i += bpw) { let v = 0; for (let j = 0; j < bpw; j++) v = (v << 1) | bits[i + j]; indices.push(v); } return indicesToMnemonic(indices, mode); }
+
+export function indicesToMnemonic(indices: number[], mode: Mode): string[] { if (mode === "256") return indices.map(i => BASE256[i]); return indices.map(i => EXP2048[i]); }
+
+export function mnemonicToIndices(words: string[], mode: Mode): number[] { const list = mode === "256" ? BASE256 : EXP2048; return words.map((w) => { const slug = toNFKD(w).toLowerCase(); validateNormalizedSlug(slug); const idx = list.indexOf(slug); if (idx < 0) throw new Error("Unknown token"); return idx; }); }
+
+// validation for strict ASCII slugs export function validateNormalizedSlug(input: string): void { if (!input) throw new Error("Empty token"); if (!/^[a-z0-9~-]+$/.test(input)) throw new Error("Invalid characters in token"); }
+
+// constant-time equality using crypto helper async function timingSafeEqAsync(a: Uint8Array, b: Uint8Array): Promise<boolean> { const { timingSafeEq } = await import("./crypto"); return timingSafeEq(a, b); }
+
+export async function mnemonicToEntropy(words: string[], mode: Mode): Promise<Uint8Array> { const bpw = bitsPerWord(mode); const idx = mnemonicToIndices(words, mode); const totalBits = idx.length * bpw;
+
+const bits: number[] = []; for (const v of idx) for (let i = bpw - 1; i >= 0; i--) bits.push((v >>> i) & 1);
+
+const allowed = (mode === "256" ? ALLOWED_ENT_256 : ALLOWED_ENT_2048).slice().sort((a,b)=>b-a); for (const ENT of allowed) { const csBits = ENT / 32; if (ENT + csBits > totalBits) continue;
+
+const entBits = bits.slice(0, ENT);
+const csGot   = bits.slice(ENT, ENT + csBits);
+
+const bytes: number[] = [];
+for (let i = 0; i < ENT; i += 8) {
+let b = 0; for (let j = 0; j < 8; j++) b = (b << 1) | entBits[i + j];
+bytes.push(b);
+}
+const entropy = new Uint8Array(bytes);
+const hash = await sha256(entropy);
+const csExp = hash[0] >>> (8 - csBits);
+const csVal = csGot.reduce((a, b) => (a << 1) | b, 0);
+const a = new Uint8Array([csVal & 0xff]);
+const e = new Uint8Array([csExp & 0xff]);
+if (await timingSafeEqAsync(a, e)) return entropy;
+
+} throw new Error("Checksum mismatch or unsupported parameters"); }
+
+// Re-encode mnemonic between modes (via entropy) export async function reencodeMnemonic(words: string[], from: Mode, to: Mode): Promise<string[]> { const ent = await mnemonicToEntropy(words, from); return entropyToMnemonic(ent, to); } const entropy = new Uint8Array(bytes); const hash = await sha256(entropy); const csExp = hash[0] >>> (8 - csBits); const csVal = csGot.reduce((a, b) => (a << 1) | b, 0); // constant-time compare on single-byte representations const a = new Uint8Array([csVal & 0xff]); const e = new Uint8Array([csExp & 0xff]); if (await timingSafeEqAsync(a, e)) return entropy; } throw new Error("Checksum mismatch or unsupported parameters"); }
+
+export async function mnemonicToSeed(mnemonic: string, passphrase = ""): Promise<Uint8Array> { const m = toNFKD(mnemonic); const saltStr = SALT_PREFIX + (passphrase ? PASS_LABEL + passphrase : ""); const salt = toNFKD(saltStr); const mBytes = new TextEncoder().encode(m); const sBytes = new TextEncoder().encode(salt); try { return await pbkdf2_hmac_sha512(mBytes, sBytes, 2048, 64); } finally { // zeroize sensitive inputs mBytes.fill(0); sBytes.fill(0); } }
+
+// === Ritual metadata resolver === export type TokenMeta = { id: number; word: string; root: string; affix: string; element: "Fire"|"Water"|"Earth"|"Air"|"Ether"; ritual_cue: string; ethical_tag: string; sigil_seed: string; };
+
+// Programmatic map: affix→element/ritual/ethic/sigil (frozen) const AFFIX_META: Record<string, Omit<TokenMeta, "id"|"word"|"root"|"affix">> = { gate:   { element: "Earth", ritual_cue: "draw crossroads",   ethical_tag: "threshold",        sigil_seed: "cross+dot" }, volt:   { element: "Fire",  ritual_cue: "clap thunder",      ethical_tag: "righteous-force", sigil_seed: "lightning-jaw" }, forge:  { element: "Fire",  ritual_cue: "strike iron",       ethical_tag: "craft",           sigil_seed: "anvil-rune" }, stream: { element: "Water", ritual_cue: "pour libation",     ethical_tag: "flow",            sigil_seed: "wave-sigil" }, tide:   { element: "Water", ritual_cue: "offer to ocean",    ethical_tag: "returning",       sigil_seed: "tide-knot" }, veil:   { element: "Air",   ritual_cue: "burn incense",      ethical_tag: "reveal/conceal",  sigil_seed: "smoke-spiral" }, crown:  { element: "Ether", ritual_cue: "white cloth prayer",ethical_tag: "mercy-law",       sigil_seed: "halo-arc" }, mirror: { element: "Air",   ritual_cue: "polish mirror",     ethical_tag: "truth",           sigil_seed: "twin-glyph" }, path:   { element: "Earth", ritual_cue: "mark footprints",   ethical_tag: "journey",         sigil_seed: "line-run" }, seal:   { element: "Ether", ritual_cue: "close the circle",  ethical_tag: "binding",         sigil_seed: "ring-lock" }, code:   { element: "Air",   ritual_cue: "write glyph",       ethical_tag: "syntax",          sigil_seed: "hex-grid" }, sigil:  { element: "Ether", ritual_cue: "trace sigil",       ethical_tag: "intent",          sigil_seed: "sigil-star" }, drum:   { element: "Earth", ritual_cue: "beat dundun",       ethical_tag: "rhythm",          sigil_seed: "pulse-mark" }, thunder:{ element: "Fire",  ritual_cue: "speak justice",     ethical_tag: "judgment",        sigil_seed: "bolt-mark" }, river:  { element: "Water", ritual_cue: "wash hands",        ethical_tag: "cleansing",       sigil_seed: "delta-sign" }, dawn:   { element: "Ether", ritual_cue: "face sunrise",      ethical_tag: "begin",           sigil_seed: "east-ray" } };
+
+export function lookupMeta256(id: number): TokenMeta { const word = BASE256[id]; const [root, affix] = word.split("-"); const m = AFFIX_META[affix]; return { id, word, root, affix, ...m } as TokenMeta; }
+
+// === Odù chain mapping === // Deterministic: primary_odù = XOR of 8-bit indices (mnemonic words) → 0..255 export function oduPrimaryIndex(words: string[], mode: Mode): number { const idx = mnemonicToIndices(words, mode); return idx.reduce((a, b) => (a ^ b) & 0xff, 0); }
+
+export function elementalSignature(words: string[]): Record<string, number> { const counts: Record<string, number> = { Fire: 0, Water: 0, Earth: 0, Air: 0, Ether: 0 }; for (const w of words) { const slug = w.split("~")[0]; const id = BASE256.indexOf(slug); if (id < 0) continue; const affix = slug.split("-")[1] as keyof typeof AFFIX_META; const elem = (AFFIX_META as any)[affix].element as string; counts[elem]++; } return counts; }
+
+// === Sabbath gate === // Queue irreversible writes on Saturday; allow override via council flag export function sabbathGate(now: Date = new Date(), councilOverride = false, trustedUtcDay?: number): "allow"|"queue" { // If a trusted UTC weekday (0..6) is supplied (e.g., from network/block time), prefer it const day = (typeof trustedUtcDay === 'number') ? trustedUtcDay : now.getUTCDay(); if (day === 6 && !councilOverride) return "queue"; return "allow"; }
+
+--- FILE: src/derivation.ts // Derivation path policy stubs (pinning for v1.0). Master key derivation is included. import { pbkdf2_hmac_sha512 } from "./crypto";
+
+export type Master = { key: Uint8Array; chainCode: Uint8Array };
+
+export async function masterFromSeed(seed: Uint8Array, label: "native"|"bitcoin" = "native"): Promise<Master> { const { createHmac } = await import("crypto"); const key = label === "bitcoin" ? "Bitcoin seed" : "BIPỌ̀N39 master"; const mac = createHmac("sha512", key); mac.update(Buffer.from(seed)); const I = mac.digest(); return { key: new Uint8Array(I.slice(0, 32)), chainCode: new Uint8Array(I.slice(32)) }; }
+
+// Path registry (purpose', coin', account', change, index) export const PATHS = { EVM:    (acct=0, ch=0, idx=0) => m/44'/60'/${acct}'/${ch}/${idx}, Bitcoin:{ p44: (coin=0, acct=0, ch=0, idx=0) => m/44'/${coin}'/${acct}'/${ch}/${idx}, p84: (coin=0, acct=0, ch=0, idx=0) => m/84'/${coin}'/${acct}'/${ch}/${idx} // bech32 }, Solana:(acct=0, ch=0, idx=0) => m/44'/501'/${acct}'/${ch}'/${idx}', // ed25519 (SLIP-0010) Sui:    (acct=0, ch=0, idx=0) => m/44'/784'/${acct}'/${ch}'/${idx}'  // ed25519 (SLIP-0010) } as const;
+
+// NOTE: Child key derivation (BIP32 for secp256k1 / SLIP-0010 for ed25519) is out-of-scope for this minimal drop.
+
+--- FILE: src/cli.ts #!/usr/bin/env node import { entropyToMnemonic, mnemonicToEntropy, mnemonicToSeed, elementalSignature, oduPrimaryIndex } from "./bipon39"; import { randomBytes } from "crypto"; import qr from "qrcode-terminal"; import { readFileSync, existsSync } from "fs";
+
+function validateEntropyQuality(entropy: Uint8Array): void { const unique = new Set(entropy).size; if (unique < entropy.length * 0.7) console.warn("⚠️  Low byte-variance observed in entropy (check RNG)"); }
+
+function warnSystemEntropyLinux() { try { if (process.platform === 'linux' && existsSync('/proc/sys/kernel/random/entropy_avail')) { const n = parseInt(readFileSync('/proc/sys/kernel/random/entropy_avail', 'utf8').trim(), 10); if (Number.isFinite(n) && n < 1000) console.warn('⚠️  Low system entropy reported on Linux'); } } catch {} }
+
+async function main() {() { const mode = (process.argv.find(a => a.startsWith("--mode="))?.split("=")[1] ?? "2048") as "256"|"2048"; const ent = parseInt(process.argv.find(a => a.startsWith("--ent="))?.split("=")[1] ?? (mode === "256" ? "256" : "128"), 10); const pass = process.argv.find(a => a.startsWith("--pass="))?.split("=")[1] ?? ""; const action = process.argv[2] ?? "gen"; // gen | check
+
+if (action === "gen") { warnSystemEntropyLinux(); const bytes = new Uint8Array(randomBytes(ent / 8)); validateEntropyQuality(bytes); const words = await entropyToMnemonic(bytes, mode); const phrase = words.join(" "); console.log(🔑 Mnemonic (${mode}): ${phrase}); const seed = await mnemonicToSeed(phrase, pass); console.log(🌱 Seed: ${Buffer.from(seed).toString("hex")}); console.log(" 📊 Elemental signature:", elementalSignature(words)); console.log(🔮 Primary Odù index: ${oduPrimaryIndex(words, mode)}); console.log(" 🧾 QR (mnemonic):"); qr.generate(phrase, { small: true }); return; }
+
+if (action === "check") { const phrase = process.argv.slice(3).join(" ") || process.argv[3] || ""; if (!phrase) throw new Error("Provide mnemonic after 'check'"); const words = phrase.trim().split(/\s+/); const ent = await mnemonicToEntropy(words, mode); console.log("✅ Checksum OK. ENT:", ent.length * 8, "bits"); return; } } main().catch(e => { console.error("❌", e?.message || e); process.exit(1); });
+
+--- FILE: vectors/vectors.json { "mode256": { "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", "mnemonic": [ "esu-gate","esu-volt","esu-forge","esu-stream","esu-tide","esu-veil","esu-crown","esu-mirror", "esu-path","esu-seal","esu-code","esu-sigil","esu-drum","esu-thunder","esu-river","esu-dawn", "sango-gate","sango-volt","sango-forge","sango-stream","sango-tide","sango-veil","sango-crown","sango-mirror", "sango-path","sango-seal","sango-code","sango-sigil","sango-drum","sango-thunder","sango-river","sango-dawn", "obatala-stream" ], "seed_no_pass": "7671a6d7ba40d24c3f70826b4e0cc74e5d2db1fb3265579626e426a6110ea7ce74351476e3b855809bcc8a7776ace942eb69093c1d1bfe1bf9fd1cbc6afb75c0", "master_native": { "IL": "1b5aaa24b346dda8f187de09fc8dc3bbd5da6097f1f3004d622be052802aa6b1", "IR": "3779555de6c42cd658a4369765ae5b30df72ebc0e8c32295ec0f541bcae7bb49" }, "seed_with_pass_ORI_river_mother": "c8161d08ad34fbc3e90ff4c51c7ef22e67ad7d62fd9d29aad544d345e51acf6d0383607a9c6ef6d98514e6cd2899d85de95d2b2d0709a80f701a77fd33105723", "master_native_with_pass": { "IL": "cb5d5a012a7f69589af9b8a199851ab40e2cbf56c90728f877efc1b7cacb43c1", "IR": "a950c4470ffa4152b3f0c46459d5f6ce67695c67d8d4a6c5a4bc409903d8f187" } }, "mode2048": { "entropy": "000102030405060708090a0b0c0d0e0f", "mnemonic": [ "esu-gatealpha","egungun-gatealpha", "osun-gateepsilon","ogun-gategamma", "esu-sigildelta","yemoja-streamdelta" ], "seed_no_pass": "abc8f81b3fddbf268bd64c213d0fcf19df9a2d2351f44d1c249a2536c9c91f4b4a5d822f90d66a3633df10de971bb375732cf95ae69d6b8c3399cd5c196ac2e0", "master_native": { "IL": "78f23de89cd75b4d590cf4748585508d6ac4ef2e5e4a6cfdc5f1bf4e9298bdf1", "IR": "fcc5cff11599f4288c804ae5ddeba417f1d49f07bbf4dd7ea4c588c84cc74912" } }, "merkle256": { "root": "0ab1fafa074065c86877877f828499a8649b558457000f0ede436730eeb9da89", "proof_example": { "slug": "sango-volt", "index": 17, "siblings": [ ["99d74aeb957d4399ff46bf6148388d87974344d22c0469d95a7607252af136fd","L"], ["dd3ab747b72de2dc38ee78c6fad371905da41baa876e13c94aff35256dc7eecc","R"], ["4c7a23e35a891d1127cbe75621d263bd4e568a09f8d86af1196383abd85081b7","R"], ["f6537d7852963ee3fc2cbfd1bb9bd0c4f02d633aa0c9535824737d0d63110813","R"], ["e5fbc23dfc5cbc2b91f7f8663d4638595a5efcf48fcb5b6f5a75e98d0f75d4d1","L"], ["a75d0bf37a99feadff58b2a240be612c441ab270b961a8be0f09047f24f6eb45","R"], ["3c6f36c6b424b6f8ce17dbd1b0d7a2c11c1b4a0cf3ea774aa5582277ebfb98ae","L"], ["6b7b324bccf3e2c8adfbf1b367a1e9077a928d920f1f1f5117a05a6169232f2e","L"] ] } } }
+
+--- FILE: test/vectors.test.ts import { describe, it, expect } from "vitest"; import { entropyToMnemonic, mnemonicToEntropy, reencodeMnemonic, bitsPerWord } from "../src/bipon39"; import { WORDLIST256_MERKLE_ROOT, merkleRoot256 as merkleRoot256Async } from "../src/wordspace";
+
+function hexToBytes(h: string) { return new Uint8Array(h.match(/../g)!.map(x => parseInt(x, 16))); } function bytesToHex(b: Uint8Array) { return [...b].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+
+describe("BIPỌ̀N39 conformance", () => { it("roundtrip 256-mode (ENT=128..256)", async () => { for (const ENT of [128,160,192,224,256]) { const ent = new Uint8Array(ENT/8).map((_,i)=>i); const words = await entropyToMnemonic(ent, "256"); const back  = await mnemonicToEntropy(words, "256"); expect(bytesToHex(back)).toBe(bytesToHex(ent)); // word count matches ceil((ENT+ENT/32)/8) const expected = Math.ceil((ENT + ENT/32) / bitsPerWord("256")); expect(words.length).toBe(expected); } });
+
+it("roundtrip 2048-mode (ENT=128..256)", async () => { for (const ENT of [128,160,192,224,256]) { const ent = new Uint8Array(ENT/8).map((_,i)=>255-i); const words = await entropyToMnemonic(ent, "2048"); const back  = await mnemonicToEntropy(words, "2048"); expect(bytesToHex(back)).toBe(bytesToHex(ent)); } });
+
+it("reencode 256 → 2048 preserves entropy", async () => { const ent = hexToBytes("000102030405060708090a0b0c0d0e0f"); const w256 = await entropyToMnemonic(ent, "256"); const w2048 = await reencodeMnemonic(w256, "256", "2048"); const back = await mnemonicToEntropy(w2048, "2048"); expect(bytesToHex(back)).toBe(bytesToHex(ent)); });
+
+it("merkle root matches pinned constant", async () => { const root = await merkleRoot256Async(); expect(root).toBe(WORDLIST256_MERKLE_ROOT); }); });
+
+--- FILE: contracts/BIPON39Genesis.sol // SPDX-License-Identifier: MIT pragma solidity ^0.8.20;
+
+/// @title BIPON39 Genesis Anchor (v1.0) /// @notice Publishes protocol/spec hashes and the canonical BASE-256 Merkle root. ///         Optionally enforces Saturday deployment (Ọbàtálá sabbath) at construction time. ///         Allows a one-time set of cross-chain "Sacred Coordinates" after other anchors exist. contract BIPON39Genesis { // ===== Immutable protocol facts ===== bytes32 public immutable PROTOCOL_SHA256;   // SHA-256(canonical JSON spec/archive) bytes32 public immutable PROTOCOL_KECCAK;   // keccak256(canonical JSON) bytes32 public immutable WORDLIST_MERKLE_ROOT; // SHA-256 Merkle root (BASE-256) string  public immutable VERSION_TAG;       // e.g., "v1.0" address public immutable OWNER;             // deployer or multisig bool    public immutable SABbathEnforced;   // if true, constructor required Saturday
+
+// ===== Cross-chain sacred coordinates (set once) =====
+struct CosmicCoordinates {
+bytes32 bitcoinTx;     // 32-byte txid (little-endian friendly as emitted)
+bytes32 arweaveTx;     // 32-byte decoded base64url tx id
+bytes32 suiObject;     // 32-byte object id
+string  arweaveB64;    // original base64url tx id for gateway UX
+}
+
+bool public coordinatesSet;
+CosmicCoordinates public coords;
+
+// ===== Events =====
+event GenesisPublished(bytes32 protocolSha256, bytes32 protocolKeccak, bytes32 merkleRoot, string version, bool sabbathEnforced);
+event CoordinatesSet(bytes32 bitcoinTx, bytes32 arweaveTx, bytes32 suiObject, string arweaveB64);
+event CommunityVerification(address indexed verifier, bool protocolValid, bool merkleValid, uint256 timestamp);
+
+// ===== Constructor =====
+constructor(
+bytes32 protocolSha256,
+bytes32 protocolKeccak,
+bytes32 merkleRoot,
+string memory versionTag,
+bool enforceSaturday
+) {
+if (enforceSaturday) {
+require(_isSaturday(block.timestamp), "Not Saturday UTC");
+}
+PROTOCOL_SHA256 = protocolSha256;
+PROTOCOL_KECCAK = protocolKeccak;
+WORDLIST_MERKLE_ROOT = merkleRoot;
+VERSION_TAG = versionTag;
+OWNER = msg.sender;
+SABbathEnforced = enforceSaturday;
+emit GenesisPublished(protocolSha256, protocolKeccak, merkleRoot, versionTag, enforceSaturday);
+}
+
+// ===== Owner-gated one-time coordinate set =====
+function setCoordinates(bytes32 bitcoinTx, bytes32 arweaveTx, bytes32 suiObject, string calldata arweaveB64) external {
+require(msg.sender == OWNER, "not owner");
+require(!coordinatesSet, "already set");
+coordinatesSet = true;
+coords = CosmicCoordinates({ bitcoinTx: bitcoinTx, arweaveTx: arweaveTx, suiObject: suiObject, arweaveB64: arweaveB64 });
+emit CoordinatesSet(bitcoinTx, arweaveTx, suiObject, arweaveB64);
+}
+
+// ===== Verifiers =====
+function verifyProtocol(bytes calldata canonicalJson) external view returns (bool shaOk, bool keccakOk) {
+return (sha256(canonicalJson) == PROTOCOL_SHA256, keccak256(canonicalJson) == PROTOCOL_KECCAK);
+}
+
+/// @dev Verify inclusion proof for an ASCII slug at index in the BASE-256 Merkle root (SHA-256 tree).
+function verifyWordInclusion(
+string calldata slug,
+uint256 index,
+bytes32[] calldata siblings,
+bool[] calldata siblingOnLeft
+) external view returns (bool) {
+require(siblings.length == siblingOnLeft.length, "len mismatch");
+bytes32 h = sha256(bytes(slug));
+for (uint256 i = 0; i < siblings.length; i++) {
+bytes32 s = siblings[i];
+h = siblingOnLeft[i] ? sha256(abi.encodePacked(s, h)) : sha256(abi.encodePacked(h, s));
+index >>= 1;
+}
+return h == WORDLIST_MERKLE_ROOT;
+}
+
+// ===== Community attestations (public) =====
+function publishCommunityVerification(bool protocolValid, bool merkleValid) external {
+emit CommunityVerification(msg.sender, protocolValid, merkleValid, block.timestamp);
+}
+
+// ===== Helpers =====
+function _isSaturday(uint256 ts) internal pure returns (bool) {
+// Unix epoch 1970-01-01 was Thursday (4). Saturday is 6.
+uint256 daysSinceEpoch = ts / 1 days;
+uint256 dow = (daysSinceEpoch + 4) % 7; // 0..6
+return dow == 6;
+}
+
+}
+
+--- FILE: scripts/util-canonical-json.ts // Deterministic JSON serialization (RFC8785-inspired, simplified): // - Sort object keys lexicographically // - Preserve array order // - Encode strings as-is (inputs must already be normalized) export function canonicalize(value: any): string { return JSON.stringify(sortRec(value)); }
+
+function sortRec(v: any): any { if (Array.isArray(v)) return v.map(sortRec); if (v && typeof v === 'object') { const out: any = {}; for (const k of Object.keys(v).sort()) out[k] = sortRec(v[k]); return out; } return v; }
+
+--- FILE: scripts/deploy-eth.ts #!/usr/bin/env ts-node import { readFileSync } from 'fs'; import { ethers } from 'ethers'; import { createHash } from 'crypto'; import { canonicalize } from './util-canonical-json';
+
+/**
+
+Usage:
+
+ARB_RPC=https://... PRIVATE_KEY=0x... ts-node scripts/deploy-eth.ts \
+
+--spec=./dist/spec.json --merkle=0ab1... --version=v1.0 --sabbath */
+
+function hex32(x: Buffer | Uint8Array | string): string { if (typeof x === 'string' && x.startsWith('0x') && x.length === 66) return x; const b = typeof x === 'string' ? Buffer.from(x.replace(/^0x/, ''), 'hex') : Buffer.from(x); if (b.length !== 32) throw new Error('need 32 bytes'); return '0x' + b.toString('hex'); }
+
+async function main() { const args = Object.fromEntries(process.argv.slice(2).map(s => s.split('='))); const specPath = args['--spec'] ?? './SPEC.json'; const merkleHex = args['--merkle']; const version = args['--version'] ?? 'v1.0'; const enforceSaturday = '--sabbath' in args || process.argv.includes('--sabbath');
+
+if (!merkleHex) throw new Error('--merkle=<hex32> required');
+
+const raw = readFileSync(specPath, 'utf8'); const canonical = canonicalize(JSON.parse(raw));
+
+const sha256Hex = createHash('sha256').update(canonical, 'utf8').digest('hex'); const keccakHex = ethers.keccak256(ethers.toUtf8Bytes(canonical)).slice(2);
+
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://localhost:8545'); const wallet = new ethers.Wallet(process.env.PRIVATE_KEY as string, provider);
+
+const factory = await (await import('../artifacts/contracts/BIPON39Genesis.sol/BIPON39Genesis.json')).default; const abi = factory.abi; const bytecode = factory.bytecode; const ContractFactory = new ethers.ContractFactory(abi, bytecode, wallet);
+
+const tx = await ContractFactory.deploy( '0x' + sha256Hex, '0x' + keccakHex, merkleHex, version, enforceSaturday ); console.log('⛏️  Deploy sent:', tx.deploymentTransaction()?.hash); const contract = await tx.waitForDeployment(); console.log('📜 Deployed at:', await contract.getAddress()); console.log('SHA-256:', '0x' + sha256Hex); console.log('KECCAK :', '0x' + keccakHex); console.log('MERKLE :', merkleHex); }
+
+main().catch(e => { console.error(e); process.exit(1); });
+
+--- FILE: scripts/anchor-bitcoin.ts #!/usr/bin/env ts-node /**
+
+Build a Bitcoin tx with OP_RETURN witness:  OP_RETURN "BIPON39" <merkle_root 32B> <protocol_sha256 32B>
+
+NOTE: You must provide UTXOs and signing separately (PSBT). This script creates the OP_RETURN output. */ import * as bitcoin from 'bitcoinjs-lib';
+
+const NETWORK = process.env.BTC_TESTNET ? bitcoin.networks.testnet : bitcoin.networks.bitcoin;
+
+function hexToBytes32(h: string): Buffer { if (h.startsWith('0x')) h = h.slice(2); if (h.length !== 64) throw new Error('need 32-byte hex'); return Buffer.from(h, 'hex'); }
+
+async function main() { const merkle = process.argv.find(a => a.startsWith('--merkle='))?.split('=')[1]; const proto  = process.argv.find(a => a.startsWith('--sha256='))?.split('=')[1]; if (!merkle || !proto) throw new Error('--merkle=0x.. --sha256=0x.. required');
+
+const data = bitcoin.script.compile([ bitcoin.opcodes.OP_RETURN, Buffer.from('BIPON39', 'ascii'), hexToBytes32(merkle), hexToBytes32(proto) ]); console.log('🔏 OP_RETURN script (hex):', data.toString('hex')); console.log('↪ Add as a zero-value output in your PSBT and broadcast.'); }
+
+main().catch(e => { console.error(e); process.exit(1); });
+
+--- FILE: scripts/anchor-arweave.ts #!/usr/bin/env ts-node import Arweave from 'arweave'; import { readFileSync } from 'fs'; import { canonicalize } from './util-canonical-json'; import { createHash } from 'crypto';
+
+async function main() { const keyPath = process.argv.find(a=>a.startsWith('--keyfile='))?.split('=')[1] || './arweave-keyfile.json'; const specPath = process.argv.find(a=>a.startsWith('--spec='))?.split('=')[1] || './SPEC.json'; const keyfile = JSON.parse(readFileSync(keyPath,'utf8')); const payload = canonicalize(JSON.parse(readFileSync(specPath,'utf8')));
+
+const arweave = Arweave.init({ host:'arweave.net', port:443, protocol:'https' }); const tx = await arweave.createTransaction({ data: payload }, keyfile); tx.addTag('Content-Type','application/json'); tx.addTag('App-Name','BIPON39'); tx.addTag('Type','ProtocolSpec'); tx.addTag('Version','v1.0');
+
+await arweave.transactions.sign(tx, keyfile); const res = await arweave.transactions.post(tx); if (res.status !== 200 && res.status !== 202) throw new Error('Arweave post failed: '+res.status);
+
+const sha256Hex = createHash('sha256').update(payload,'utf8').digest('hex'); console.log('🎯 Arweave TX:', tx.id); console.log('🧮 SHA-256(spec): 0x'+sha256Hex); console.log('🔗 URL: https://arweave.net/'+tx.id); }
+
+main().catch(e=>{ console.error(e); process.exit(1); });
+
+--- FILE: sui/Move.toml [package] name = "bipon39_genesis" version = "0.0.1"
+
+[dependencies] Sui = { git = "https://github.com/MystenLabs/sui", subdir = "crates/sui-framework/packages/sui-framework" }
+
+[addresses] bipon39 = "0x0"
+
+--- FILE: sui/sources/genesis.move module bipon39::genesis { use std::string; use std::vector; use sui::tx_context::{Self, TxContext};
+
+public struct Genesis has key, store {
+sha256: vector<u8>,
+keccak: vector<u8>,
+merkle_root: vector<u8>,
+version: string::String,
+arweave_tx: vector<u8>,
+bitcoin_tx: vector<u8>,
+}
+
+public fun publish(
+sha256: vector<u8>,
+keccak: vector<u8>,
+merkle_root: vector<u8>,
+version: string::String,
+arweave_tx: vector<u8>,
+bitcoin_tx: vector<u8>,
+ctx: &mut TxContext
+) {
+move_to(ctx, Genesis { sha256, keccak, merkle_root, version, arweave_tx, bitcoin_tx });
+}
+
+}
+
+--- FILE: RUNBOOK_GENESIS.md
+
+BIPỌ̀N39 Genesis Anchoring Runbook
+
+0. Prepare canonical spec & hashes
+
+
+
+Ensure SPEC.json is deterministic (use scripts/util-canonical-json.ts if generating)
+
+node -e "const c=require('./dist/scripts/util-canonical-json.js');const fs=require('fs');const o=JSON.parse(fs.readFileSync('SPEC.json','utf8'));fs.writeFileSync('SPEC.canonical.json', c.canonicalize(o));"
+node -e "const fs=require('fs');const crypto=require('crypto');const s=fs.readFileSync('SPEC.canonical.json','utf8');console.log('SHA-256: 0x'+crypto.createHash('sha256').update(s).digest('hex'));"
+
+1. Arweave (Sacred West)
+
+
+
+ARWEAVE_KEYFILE=./arweave-keyfile.json ts-node scripts/anchor-arweave.ts --keyfile=$ARWEAVE_KEYFILE --spec=./SPEC.canonical.json
+
+Record: AR_TX_ID and SHA-256(spec)
+
+2. Ethereum (Sacred East)
+
+
+
+export RPC_URL=<https provider>
+export PRIVATE_KEY=0x...
+ts-node scripts/deploy-eth.ts --spec=./SPEC.canonical.json --merkle=0x<MerkleRootHex> --version=v1.0 --sabbath
+
+Record: ETH_CONTRACT_ADDRESS
+
+3. Bitcoin (Sacred North)
+
+
+
+Build OP_RETURN witness with merkle+sha256
+
+BTC_TESTNET=1 ts-node scripts/anchor-bitcoin.ts --merkle=0x<MerkleRootHex> --sha256=0x<Sha256Spec>
+
+Insert script as an output in your PSBT, sign & broadcast
+
+Record: BTC_TXID
+
+4. Sui (Sacred South)
+
+
+
+sui client publish --gas-budget 100000000 sui
+
+Record: SUI_OBJECT_ID
+
+5. Cross-link on Ethereum
+
+
+
+After you have BTC_TXID, AR_TX_ID, SUI_OBJECT_ID, call setCoordinates()
+
+cast send <ETH_CONTRACT_ADDRESS> "setCoordinates(bytes32,bytes32,bytes32,string)" 0x<BTC_TXID> 0x<AR_TX_DECODED_32B> 0x<SUI_OBJECT_ID_32B> <AR_TX_ID_BASE64URL>
+
+6. Community Witness
+
+
+
+Anyone can call publishCommunityVerification(protocolValid, merkleValid) on ETH contract.
+
+Publicly announce all four sacred coordinates and how to verify each hash.

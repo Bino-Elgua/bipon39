@@ -1,0 +1,9 @@
+[package]
+name = "bipon39_genesis"
+version = "0.0.1"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui", subdir = "crates/sui-framework/packages/sui-framework" }
+
+[addresses]
+bipon39 = "0x0"

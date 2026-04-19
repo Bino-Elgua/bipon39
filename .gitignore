@@ -1,0 +1,6 @@
+node_modules/
+dist/
+artifacts/
+*.js.map
+.env
+arweave-keyfile.json

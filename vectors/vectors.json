@@ -1,0 +1,47 @@
+{
+  "mode256": {
+    "entropy": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "mnemonic": [
+      "esu-gate","esu-volt","esu-forge","esu-stream","esu-tide","esu-veil","esu-crown","esu-mirror",
+      "esu-path","esu-seal","esu-code","esu-sigil","esu-drum","esu-thunder","esu-river","esu-dawn",
+      "sango-gate","sango-volt","sango-forge","sango-stream","sango-tide","sango-veil","sango-crown","sango-mirror",
+      "sango-path","sango-seal","sango-code","sango-sigil","sango-drum","sango-thunder","sango-river","sango-dawn",
+      "obatala-stream"
+    ],
+    "seed_no_pass": "7671a6d7ba40d24c3f70826b4e0cc74e5d2db1fb3265579626e426a6110ea7ce74351476e3b855809bcc8a7776ace942eb69093c1d1bfe1bf9fd1cbc6afb75c0",
+    "master_native": {
+      "IL": "1b5aaa24b346dda8f187de09fc8dc3bbd5da6097f1f3004d622be052802aa6b1",
+      "IR": "3779555de6c42cd658a4369765ae5b30df72ebc0e8c32295ec0f541bcae7bb49"
+    },
+    "seed_with_pass_ORI_river_mother": "c8161d08ad34fbc3e90ff4c51c7ef22e67ad7d62fd9d29aad544d345e51acf6d0383607a9c6ef6d98514e6cd2899d85de95d2b2d0709a80f701a77fd33105723",
+    "master_native_with_pass": {
+      "IL": "cb5d5a012a7f69589af9b8a199851ab40e2cbf56c90728f877efc1b7cacb43c1",
+      "IR": "a950c4470ffa4152b3f0c46459d5f6ce67695c67d8d4a6c5a4bc409903d8f187"
+    }
+  },
+  "mode2048": {
+    "entropy": "000102030405060708090a0b0c0d0e0f",
+    "seed_no_pass": "abc8f81b3fddbf268bd64c213d0fcf19df9a2d2351f44d1c249a2536c9c91f4b4a5d822f90d66a3633df10de971bb375732cf95ae69d6b8c3399cd5c196ac2e0",
+    "master_native": {
+      "IL": "78f23de89cd75b4d590cf4748585508d6ac4ef2e5e4a6cfdc5f1bf4e9298bdf1",
+      "IR": "fcc5cff11599f4288c804ae5ddeba417f1d49f07bbf4dd7ea4c588c84cc74912"
+    }
+  },
+  "merkle256": {
+    "root": "0ab1fafa074065c86877877f828499a8649b558457000f0ede436730eeb9da89",
+    "proof_example": {
+      "slug": "sango-volt",
+      "index": 17,
+      "siblings": [
+        ["99d74aeb957d4399ff46bf6148388d87974344d22c0469d95a7607252af136fd","L"],
+        ["dd3ab747b72de2dc38ee78c6fad371905da41baa876e13c94aff35256dc7eecc","R"],
+        ["4c7a23e35a891d1127cbe75621d263bd4e568a09f8d86af1196383abd85081b7","R"],
+        ["f6537d7852963ee3fc2cbfd1bb9bd0c4f02d633aa0c9535824737d0d63110813","R"],
+        ["e5fbc23dfc5cbc2b91f7f8663d4638595a5efcf48fcb5b6f5a75e98d0f75d4d1","L"],
+        ["a75d0bf37a99feadff58b2a240be612c441ab270b961a8be0f09047f24f6eb45","R"],
+        ["3c6f36c6b424b6f8ce17dbd1b0d7a2c11c1b4a0cf3ea774aa5582277ebfb98ae","L"],
+        ["6b7b324bccf3e2c8adfbf1b367a1e9077a928d920f1f1f5117a05a6169232f2e","L"]
+      ]
+    }
+  }
+}
